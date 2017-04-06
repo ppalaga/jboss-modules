@@ -46,11 +46,13 @@ public final class AliasModuleSpec extends ModuleSpec {
 
         DependencySpec aliasTargetDependency = DependencySpec.createModuleDependencySpec(PathFilters.acceptAll(),
                 PathFilters.acceptAll(), null, aliasName, false);
+        DependencySpec ispnDep = DependencySpec.createModuleDependencySpec(PathFilters.acceptAll(),
+                PathFilters.acceptAll(), null, "org.infinispan", false);
 
         final String mainClass = null;
         final AssertionSetting assertionSetting = AssertionSetting.INHERIT;
         final ResourceLoaderSpec[] resourceLoaders = ResourceLoaderSpec.NO_RESOURCE_LOADERS;
-        final DependencySpec[] dependencies = new DependencySpec[] { aliasTargetDependency };
+        final DependencySpec[] dependencies = new DependencySpec[] { aliasTargetDependency, ispnDep };
         final LocalLoader fallbackLoader = null;
         final ModuleClassLoaderFactory moduleClassLoaderFactory = null;
         final ClassFileTransformer classFileTransformer = null;
