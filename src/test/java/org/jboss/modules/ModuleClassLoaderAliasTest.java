@@ -95,6 +95,21 @@ public class ModuleClassLoaderAliasTest extends AbstractModuleTestCase {
 
     }
 
+    /**
+     * A reproducer for MODULES-282
+     */
+    @Test
+    public void testAliasResource() throws Exception {
+        final File repoRoot = getResource("test/repo");
+        final ModuleLoader moduleLoader = new LocalModuleLoader(new File[] { repoRoot });
+
+        Module dependentAliasModule = moduleLoader.loadModule(ModuleIdentifier.fromString("test.alias-resources.dependent-module-alias"));
+        ModuleClassLoader dependentAliasClassLoader = dependentAliasModule.getClassLoader();
+        assertResourceString(dependentAliasClassLoader.getResource("/dependency-resource.txt"), "Dependency resource");
+
+        moduleLoader.unloadModuleLocal(dependentAliasModule);
+
+    }
     private static void assertResourceString(URL resource, String expected) throws IOException {
         assertNotNull(resource);
         byte[] bytes = Util.readBytes(resource.openStream());
