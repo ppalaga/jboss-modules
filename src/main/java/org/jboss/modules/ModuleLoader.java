@@ -33,6 +33,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -472,41 +473,62 @@ public class ModuleLoader {
             return futureModule.getModule();
         }
 
-        FutureModule newFuture = new FutureModule(name);
-        futureModule = moduleMap.putIfAbsent(name, newFuture);
-        if (futureModule != null) {
-            return futureModule.getModule();
+        final ModuleLogger log = Module.log;
+        log.trace("Locally loading module %s from %s", name, this);
+        final long startTime = Metrics.getCurrentCPUTime();
+        final ModuleSpec moduleSpec = findModule(name);
+        loadTime.addAndGet(Metrics.getCurrentCPUTime() - startTime);
+        if (moduleSpec == null) {
+            log.trace("Module %s not found from %s", name, this);
+            return null;
         }
+        if (! moduleSpec.getName().equals(name)) {
+            throw new ModuleLoadException("Module loader found a module with the wrong name");
+        }
+        final Module module;
+        if ( moduleSpec instanceof AliasModuleSpec) {
+            final String aliasName = ((AliasModuleSpec) moduleSpec).getAliasName();
+            try {
+                /* query for aliasName in the moduleMap and add it via a recursive
+                 * call of loadModuleLocal() if it is not there */
+                FutureModule aliasedFuture = null;
+                while ((aliasedFuture = moduleMap.get(aliasName)) == null) {
+                    loadModuleLocal(aliasName);
+                }
+                /* aliasedFuture != null at this point */
+                /* Another thread may have registered the name in between and we will use
+                 * that older registration if it is available */
+                futureModule = moduleMap.putIfAbsent(name, aliasedFuture);
+                futureModule = futureModule != null ? futureModule : aliasedFuture;
+                synchronized (futureModule.aliases) {
+                    futureModule.aliases.add(name);
+                }
+                module = futureModule.getModule();
+                log.trace("Aliased module %s as %s from %s", aliasName, name, this);
+            } catch (RuntimeException | Error e) {
+                log.trace(e, "Failed to load module %s (alias for %s)", name, aliasName);
+                throw e;
+            }
+        } else {
+            FutureModule newFuture = new FutureModule(name);
+            futureModule = moduleMap.putIfAbsent(name, newFuture);
+            if (futureModule != null) {
+                return futureModule.getModule();
+            }
 
-        boolean ok = false;
-        try {
-            final ModuleLogger log = Module.log;
-            log.trace("Locally loading module %s from %s", name, this);
-            final long startTime = Metrics.getCurrentCPUTime();
-            final ModuleSpec moduleSpec = findModule(name);
-            loadTime.addAndGet(Metrics.getCurrentCPUTime() - startTime);
-            if (moduleSpec == null) {
-                log.trace("Module %s not found from %s", name, this);
-                return null;
-            }
-            if (! moduleSpec.getName().equals(name)) {
-                throw new ModuleLoadException("Module loader found a module with the wrong name");
-            }
-            final Module module;
-            if ( moduleSpec instanceof AliasModuleSpec) {
-                module = defineModule(((AliasModuleSpec) moduleSpec).asConcreteModuleSpec(), newFuture);
-            } else {
+            boolean ok = false;
+            try {
                 module = defineModule((ConcreteModuleSpec) moduleSpec, newFuture);
-            }
-            log.trace("Loaded module %s from %s", name, this);
-            ok = true;
-            return module;
-        } finally {
-            if (! ok) {
-                newFuture.setModule(null);
-                moduleMap.remove(name, newFuture);
+                log.trace("Loaded module %s from %s", name, this);
+                ok = true;
+            } finally {
+                if (! ok) {
+                    newFuture.setModule(null);
+                    moduleMap.remove(name, newFuture);
+                }
             }
         }
+        return module;
     }
 
     /**
@@ -565,7 +587,21 @@ public class ModuleLoader {
         final String id = module.getIdentifier().toString();
         final FutureModule futureModule = moduleMap.get(id);
         if (futureModule != null && futureModule.module == module) {
-            moduleMap.remove(id, futureModule);
+            final ModuleLogger log = Module.log;
+            synchronized (futureModule.aliases) {
+                for (String alias : futureModule.aliases) {
+                    if (moduleMap.remove(alias, futureModule)) {
+                        log.trace("Removed alias %s of module %s from %s", alias, id, this);
+                    } else {
+                        log.trace("Did not remove alias %s of module %s from %s", alias, id, this);
+                    }
+                }
+            }
+            if (moduleMap.remove(id, futureModule)) {
+                log.trace("Removed module %s from %s", id, this);
+            } else {
+                log.trace("Did not remove module %s from %s", id, this);
+            }
         }
     }
 
@@ -806,7 +842,9 @@ public class ModuleLoader {
         private static final Object NOT_FOUND = new Object();
 
         final String name;
+        final Set<String> aliases = new HashSet<>();
         volatile Object module;
+
 
         FutureModule(final String name) {
             this.name = name;
